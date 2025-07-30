@@ -1,0 +1,3 @@
+xarray
+rasterio
+ecmwf-opendata
