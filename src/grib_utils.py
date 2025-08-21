@@ -1,4 +1,5 @@
 import os
+import numpy as np
 import xarray as xr
 import rasterio
 from rasterio.transform import from_origin
@@ -35,24 +36,8 @@ def get_grib_data(client_name, parameters, outpath, date=0, time=0, step=24, str
 def grib_to_raster(filepath, outpath=None):
     """
     Converts a GRIB file containing ECMWF total precipitation data to a GeoTIFF raster.
-
-    Args:
-        filepath (str): Path to the input GRIB file.
-        outpath (str, optional): Path to the output GeoTIFF file. If None, saves as
-            filepath with '.tif' extension.
-
-    The function reads the GRIB file, extracts the 'tp' (total precipitation) variable,
-    converts its units from meters to millimeters, and writes the data as a single-band
-    GeoTIFF with geographic coordinates (EPSG:4326).
-
-    The output GeoTIFF is saved in the same directory as the input file, with the
-    extension changed to '.tif' if outpath is not specified.
-
-    Example:
-        grib_to_raster("/path/to/file.grib")
-        grib_to_raster("/path/to/file.grib", "/path/to/output.tif")
+    If multiple steps are present, saves each step as a separate band.
     """
-
     ds = xr.open_dataset(filepath, engine="cfgrib", decode_timedelta=True)
     tp = ds['tp']  # total precipitation variable
 
@@ -60,37 +45,45 @@ def grib_to_raster(filepath, outpath=None):
     tp_mm = tp * 1000
     tp_mm.attrs['units'] = 'mm'
 
-    # Since time does not exist, use tp_mm directly
-    data = tp_mm.values.astype('float32')
-
-    # Get coordinates
-    lon = tp_mm.longitude.values
-    lat = tp_mm.latitude.values
-
-    # Calculate resolution
-    res_x = abs(lon[1] - lon[0])
-    res_y = abs(lat[1] - lat[0])
-
-    # Build transform (assumes north-up, regular grid)
-    transform = from_origin(lon.min() - res_x/2, lat.max() + res_y/2, res_x, res_y)
-
     # Output path
     if outpath is None:
         tif_path = os.path.splitext(filepath)[0] + ".tif"
     else:
         tif_path = outpath
 
+    # Get coordinates
+    lon = tp_mm.longitude.values
+    lat = tp_mm.latitude.values
+    res_x = abs(lon[1] - lon[0])
+    res_y = abs(lat[1] - lat[0])
+    transform = from_origin(lon.min() - res_x/2, lat.max() + res_y/2, res_x, res_y)
+
+    # Handle multiple steps (timesteps)
+    data = tp_mm.values
+    if data.ndim == 3:  # (step, y, x)
+        bands = data.shape[0]
+        height = data.shape[1]
+        width = data.shape[2]
+    elif data.ndim == 2:  # (y, x)
+        bands = 1
+        height = data.shape[0]
+        width = data.shape[1]
+        data = data[np.newaxis, :, :]  # add band dimension
+    else:
+        raise ValueError("Unexpected data shape: {}".format(data.shape))
+
     with rasterio.open(
         tif_path,
         'w',
         driver='GTiff',
-        height=data.shape[0],
-        width=data.shape[1],
-        count=1,
+        height=height,
+        width=width,
+        count=bands,
         dtype='float32',
         crs='EPSG:4326',
         transform=transform,
     ) as dst:
-        dst.write(data, 1)
+        for i in range(bands):
+            dst.write(data[i, :, :], i + 1)
 
     print(f"GeoTIFF written to {tif_path}")
