@@ -1,5 +1,7 @@
 import os
 import re
+import csv
+from datetime import datetime
 import numpy as np
 import xarray as xr
 import rasterio
@@ -100,11 +102,6 @@ def grib_to_raster(filepath, outpath=None):
 def store_metadata(
     raster_path, csv_path, variable
 ):
-    import rasterio
-    import csv
-    import os
-    import re
-    from datetime import datetime
 
     filename = os.path.basename(raster_path)
 
@@ -123,9 +120,15 @@ def store_metadata(
         epsg_code = src.crs.to_epsg() if src.crs else None
         crs = f"EPSG:{epsg_code}" if epsg_code else src.crs.to_string() if src.crs else ""
         bounds = src.bounds
-        lats = f"{bounds.top},{bounds.bottom}"
-        lons = f"{bounds.left},{bounds.right}"
+
         xmin, ymin, xmax, ymax = bounds.left, bounds.bottom, bounds.right, bounds.top
+
+        # Calculate latitude and longitude steps and lists
+        lat_step = (ymax - ymin) / height
+        lon_step = (xmax - xmin) / width
+
+        lats = [ymin + i * lat_step for i in range(height)]
+        lons = [xmin + i * lon_step for i in range(width)]
 
         # Get current timestamp
         download_time = datetime.now().isoformat(timespec='seconds')
