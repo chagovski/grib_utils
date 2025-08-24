@@ -1,4 +1,5 @@
 import os
+import re
 import numpy as np
 import xarray as xr
 import rasterio
@@ -83,7 +84,65 @@ def grib_to_raster(filepath, outpath=None):
         crs='EPSG:4326',
         transform=transform,
     ) as dst:
-        for i in range(bands):
-            dst.write(data[i, :, :], i + 1)
+        # Set band names for timesteps if available
+        if "step" in tp_mm.dims:
+            steps = ds["step"].values
+            step_hours = [int(s / np.timedelta64(1, 'h')) for s in steps]
+            band_names = [f"step_{h}h" for h in step_hours]
+            for i in range(bands):
+                dst.write(data[i, :, :], i + 1)
+                dst.set_band_description(i + 1, band_names[i])
+        else:
+            dst.write(data[0, :, :], 1)
 
     print(f"GeoTIFF written to {tif_path}")
+
+def store_metadata(
+    raster_path, csv_path, variable
+):
+    import rasterio
+    import csv
+    import os
+    import re
+    from datetime import datetime
+
+    filename = os.path.basename(raster_path)
+
+    # Extract basetime, horizon, steplist from filename
+    match = re.search(r'base(\d{8})T(\d{2})Z_h(\d+)_step(\d+)', filename)
+    if not match:
+        raise ValueError("Filename does not match expected format.")
+    basetime = f"{match.group(1)}T{match.group(2)}"
+    horizon = int(match.group(3))
+    step = int(match.group(4))
+    steplist = list(range(step, horizon + 1, step))
+
+    with rasterio.open(raster_path) as src:
+        width = src.width
+        height = src.height
+        epsg_code = src.crs.to_epsg() if src.crs else None
+        crs = f"EPSG:{epsg_code}" if epsg_code else src.crs.to_string() if src.crs else ""
+        bounds = src.bounds
+        lats = f"{bounds.top},{bounds.bottom}"
+        lons = f"{bounds.left},{bounds.right}"
+        xmin, ymin, xmax, ymax = bounds.left, bounds.bottom, bounds.right, bounds.top
+
+        # Get current timestamp
+        download_time = datetime.now().isoformat(timespec='seconds')
+
+        row = [
+            filename, variable, basetime, horizon, steplist, crs, lats, lons,
+            width, height, xmin, ymin, xmax, ymax, download_time
+        ]
+
+    write_header = not os.path.exists(csv_path)
+    with open(csv_path, "a", newline="") as csvfile:
+        writer = csv.writer(csvfile)
+        if write_header:
+            writer.writerow([
+                "filename", "variable", "basetime", "horizon", "steps",
+                "crs", "lats", "lons", "width", "height", "xmin", "ymin", "xmax", "ymax", "download_time"
+            ])
+        writer.writerow(row)
+
+    print(f"Appended metadata for {filename} to {csv_path}")
