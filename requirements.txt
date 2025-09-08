@@ -2,3 +2,5 @@ numpy
 xarray
 rasterio
 ecmwf-opendata
+cfgrib
+netCDF4

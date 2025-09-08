@@ -1,11 +1,11 @@
 # Example for main.py
 import os
 from datetime import datetime
-from grib_utils import get_grib_data, grib_to_raster, store_metadata
+from grib_utils import get_grib_data, grib_to_geotiff, grib_to_netcdf, store_metadata
 
 if __name__ == "__main__":
 
-    output_dir = "path/to/output/dir"
+    output_dir = "C:/pasik/MSF"
     metadata_path = os.path.join(output_dir, "ecmwf_forecasts.csv")
 
     basedate = datetime.today().strftime('%Y%m%d')
@@ -32,7 +32,8 @@ if __name__ == "__main__":
 
 
     # Convert GRIB to GeoTIFF
-    grib_to_raster(output_path)
+    grib_to_geotiff(output_path, separate_timesteps=True)
+    # grib_to_netcdf(output_path, separate_timesteps=False)
 
     store_metadata(
         raster_path=output_path.replace(".grb", ".tif"),

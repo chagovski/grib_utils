@@ -42,3 +42,34 @@ For each raster file, the following metadata is stored:
 - `xmin`, `ymin`, `xmax`, `ymax` — spatial extent of the raster
 - `download_time` — timestamp when the metadata entry was added
 
+## Create the Conda Environment from environment.yml
+
+1. Open Anaconda Prompt or your terminal.
+2. Navigate to the root folder containing `environment.yml`. For example:
+   ```sh
+   cd path/to/grib_utils
+   ```
+3. Run the following command to create the environment:
+   ```sh
+   conda env create -f environment.yml
+   ```
+4. Activate the environment:
+   ```sh
+   conda activate ecmwf_forecasts
+   ```
+5. Your environment is now ready to use with all required packages installed.
+
+## Launching the Jupyter Notebook
+
+After installing and activating your conda environment, you can launch desired notebook as follows:
+
+1. Open Anaconda Prompt or your terminal.
+2. Activate your environment:
+
+   ```sh
+   conda activate ecmwf_forecasts
+   ```
+3. launch the notebook directly:
+```sh
+jupyter notebook src/ecmwf_event_forecasting.ipynb
+```
