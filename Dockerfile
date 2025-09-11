@@ -14,7 +14,7 @@ RUN conda env create -f environment.yml
 ENV PATH /opt/conda/envs/ecmwf_forecasts/bin:$PATH
 
 # Set entrypoint to run the script with arguments
-ENTRYPOINT ["python", "src/ecmwf_event_forecasting.py"]
+ENTRYPOINT ["python", "src/ECMWF_forecasting_raster.py"]
 
 # Example CMD, can be overridden at runtime
 CMD ["/app/output"]
