@@ -188,7 +188,22 @@ def grib_to_netcdf(filepath, outpath=None, stack=True):
                 attrs=tp_mm.attrs
             )
             ds_mm = single_tp.to_dataset()
-            ds_mm.attrs.update(ds.attrs)
+            # Remove 'surface' coordinate if present
+            if 'surface' in ds_mm.coords:
+                ds_mm = ds_mm.drop_vars('surface')
+            # Rename 'time' coordinate to 'basetime' if present
+            if 'time' in ds_mm.coords:
+                ds_mm = ds_mm.rename({'time': 'basetime'})
+            # Swap main dimension to 'valid_time' if possible
+            if 'step' in ds_mm.dims and 'valid_time' in ds_mm.coords:
+                ds_mm = ds_mm.swap_dims({'step': 'valid_time'})
+            # Robustly rename 'valid_time' to 'std_time' after swapping
+            if 'valid_time' in ds_mm.dims:
+                ds_mm = ds_mm.rename({'valid_time': 'std_time'})
+
+            # Only copy global attributes that do not start with 'GRIB_'
+            filtered_attrs = {k: v for k, v in ds.attrs.items() if not k.startswith("GRIB_")}
+            ds_mm.attrs.update(filtered_attrs)
             # Add CF-compliant CRS variable with WKT
             crs_var = xr.DataArray(
                 0,
@@ -213,7 +228,22 @@ def grib_to_netcdf(filepath, outpath=None, stack=True):
         else:
             out_path = outpath
         ds_mm = tp_mm.to_dataset(name="tp_mm")
-        ds_mm.attrs.update(ds.attrs)  # preserve global metadata
+        # Remove 'surface' coordinate if present
+        if 'surface' in ds_mm.coords:
+            ds_mm = ds_mm.drop_vars('surface')
+        # Rename 'time' coordinate to 'basetime' if present
+        if 'time' in ds_mm.coords:
+            ds_mm = ds_mm.rename({'time': 'basetime'})
+        # Swap main dimension to 'valid_time' if possible
+        if 'step' in ds_mm.dims and 'valid_time' in ds_mm.coords:
+            ds_mm = ds_mm.swap_dims({'step': 'valid_time'})
+        # Robustly rename 'valid_time' to 'std_time' after swapping
+        if 'valid_time' in ds_mm.dims:
+            ds_mm = ds_mm.rename({'valid_time': 'std_time'})
+
+        # Only copy global attributes that do not start with 'GRIB_'
+        filtered_attrs = {k: v for k, v in ds.attrs.items() if not k.startswith("GRIB_")}
+        ds_mm.attrs.update(filtered_attrs)
         # Add CF-compliant CRS variable with WKT
         crs_var = xr.DataArray(
             0,
