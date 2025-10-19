@@ -1,35 +1,62 @@
-import xarray as xr
+#!/usr/bin/env python3
+"""
+Script to download ECMWF forecast data and convert it to GeoPackage format.
+"""
 
-ds = xr.open_dataset("/mnt/company_general/TMP/AP/temp/ECMWF_total_accumulated_precipitation_forecast_base20251012T00Z_h240_step24.nc")
-print(ds)  # Shows all variables, coordinates, and global attributes
+import os
+import numpy as np
+from grib_utils import get_grib_data, grib_to_geopackage
 
-# To list all variable names:
-print(ds.data_vars)
+def main():
+    # Configuration
+    client_name = "ecmwf"
+    parameters = ['tp']  # total precipitation
+    
+    # Output directory and file paths
+    output_dir = r"S:\TMP\AP\temp"
+    os.makedirs(output_dir, exist_ok=True)
+    
+    grib_file = os.path.join(output_dir, "ecmwf_forecast.grib")
+    gpkg_file = os.path.join(output_dir, "ecmwf_forecast.gpkg")
+    
+    print("Starting ECMWF forecast download and conversion...")
+    
+    # Step 1: Download GRIB data
+    print(f"1. Downloading ECMWF forecast data to {grib_file}")
+    try:
+        get_grib_data(
+            client_name=client_name,
+            parameters=parameters,
+            outpath=grib_file,
+            date=0,  # Latest available date
+            time=0,  # 00Z run
+            step=[240],  # Every 24 hours up to 240 hours (10 days)
+            stream="oper",  # Operational forecast
+            type_="fc",  # Forecast
+            levtype="sfc"  # Surface level
+        )
+        print("✓ Download completed successfully")
+    except Exception as e:
+        print(f"✗ Download failed: {e}")
+        return
+    
+    # Step 2: Convert to GeoPackage
+    print(f"2. Converting GRIB to GeoPackage: {gpkg_file}")
+    try:
+        grib_to_geopackage(
+            filepath=grib_file,
+            outpath=gpkg_file,
+            mode="jenks",
+            n_classes=9,
+            # stack=True  # All timesteps in one file with multiple layers
+        )
+        print("✓ Conversion to GeoPackage completed successfully")
+    except Exception as e:
+        print(f"✗ Conversion failed: {e}")
+        return
+    
+    print(f"📁 GRIB file: {grib_file}")
+    print(f"📁 GeoPackage file: {gpkg_file}")
 
-# To list all global attributes:
-print(ds.attrs)
-
-
-# Print the contents of the 'valid_time' dimension (if present)
-# print("valid_time dimension:", ds['valid_time'].values)
-
-
-
-
-
-# Print dtypes of all variables
-print("\nVariable dtypes:")
-for var in ds.data_vars:
-	print(f"{var}: {ds[var].dtype}")
-
-# Print dtypes of all coordinates
-print("\nCoordinate dtypes:")
-for coord in ds.coords:
-	print(f"{coord}: {ds.coords[coord].dtype}")
-
-# Print dtypes of all dimensions
-print("\nDimension dtypes:")
-for dim in ds.dims:
-	arr = ds[dim] if dim in ds.data_vars else ds.coords.get(dim, None)
-	if arr is not None:
-		print(f"{dim}: {arr.dtype}")
+if __name__ == "__main__":
+    main()
