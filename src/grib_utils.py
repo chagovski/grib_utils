@@ -18,12 +18,14 @@ def get_grib_data(client_name, parameters, outpath, date=0, time=0, step=24, str
         client_name (str): The name of the client (e.g., "ecmwf").
         parameters (list): List of parameters to retrieve (e.g., ['tp']).
         outpath (str): Path to save the retrieved GRIB file.
-        date (int): Date for the data retrieval (default: 0).
-        time (int): Time for the data retrieval (default: 0).
-        step (int): Step for the data retrieval (default: 24).
-        stream (str): Stream type (default: "oper").
-        type_ (str): Type of data (default: "fc").
-        levtype (str): Level type (default: "sfc").
+        date (int or str): Date for the data retrieval. Use 0 for latest available, 
+                          or specify date as YYYYMMDD format (e.g., 20251018 for Oct 18, 2025).
+        time (int): Forecast initialization time in hours (0, 6, 12, 18). Default: 0 (00Z).
+        step (int or list): Forecast step(s) in hours. Can be single value (e.g., 24) 
+                           or list of steps (e.g., [24, 48, 72]). Default: 24.
+        stream (str): Stream type (default: "oper" for operational forecast).
+        type_ (str): Type of data (default: "fc" for forecast).
+        levtype (str): Level type (default: "sfc" for surface).
     """
     from ecmwf.opendata import Client
 
@@ -320,7 +322,7 @@ def store_metadata(
 
     print(f"Appended metadata for {filename} to {csv_path}")
 
-def grib_to_geopackage(filepath, outpath=None, thresholds=None, stack=True, mode=None, n_classes=None):
+def grib_to_geopackage(filepath, outpath=None, thresholds=None, mode=None, n_classes=None, stack=True):
     """
     Converts a GRIB file containing ECMWF total precipitation data to GeoPackage format.
     Vectorizes the raster data based on provided thresholds.
@@ -330,11 +332,11 @@ def grib_to_geopackage(filepath, outpath=None, thresholds=None, stack=True, mode
         outpath (str, optional): Path to save the output GeoPackage. If None, uses input filename with .gpkg extension.
         thresholds (list, optional): List of threshold values for vectorization. 
                                    Mutually exclusive with mode/n_classes.
-        stack (bool): If True, processes all timesteps together. If False, creates separate files for each timestep.
         mode (str, optional): Classification method - "jenks" for natural breaks or "equal" for equal intervals.
                              Must be used together with n_classes. Mutually exclusive with thresholds.
         n_classes (int, optional): Number of classes for classification. Must be used together with mode.
                                  Mutually exclusive with thresholds.
+        stack (bool): If True, processes all timesteps together. If False, creates separate files for each timestep.
     
     Returns:
         None
@@ -493,9 +495,10 @@ def grib_to_geopackage(filepath, outpath=None, thresholds=None, stack=True, mode
                         'geometry': shape(geom),
                         'threshold_range': range_label,
                         'min_threshold': min_val,
-                        'max_threshold': max_threshold_val,
-                        'precipitation_mm': range_label
+                        'max_threshold': max_threshold_val
                     })
+        
+        gdf = gpd.GeoDataFrame(geometries, crs='EPSG:4326')
         
         return gpd.GeoDataFrame(geometries, crs='EPSG:4326')
 
