@@ -8,7 +8,8 @@ import rasterio
 from rasterio.transform import from_origin
 from rasterio.features import shapes
 import geopandas as gpd
-from shapely.geometry import shape
+from shapely.geometry import shape, LineString, MultiLineString
+import matplotlib.pyplot as plt
 
 def get_grib_data(client_name, parameters, outpath, date=0, time=0, step=24, stream="oper", type_="fc", levtype="sfc"):
     """
@@ -40,7 +41,6 @@ def get_grib_data(client_name, parameters, outpath, date=0, time=0, step=24, str
         param=parameters,
         target=outpath
     )
-
 
 def grib_to_geotiff(filepath, outpath=None, stack=True):
     """
@@ -322,193 +322,184 @@ def store_metadata(
 
     print(f"Appended metadata for {filename} to {csv_path}")
 
-def grib_to_geopackage(filepath, outpath=None, thresholds=None, mode=None, n_classes=None, stack=True):
+def grib_to_geopackage(filepath, outpath=None, thresholds=None, mode=None, n_classes=None, stack=True, flatten=True, vector_type='contour'):
     """
     Converts a GRIB file containing ECMWF total precipitation data to GeoPackage format.
-    Vectorizes the raster data based on provided thresholds.
-    
+    Supports both contour and polygon vectorization via vector_type argument.
     Args:
         filepath (str): Path to the input GRIB file.
         outpath (str, optional): Path to save the output GeoPackage. If None, uses input filename with .gpkg extension.
-        thresholds (list, optional): List of threshold values for vectorization. 
-                                   Mutually exclusive with mode/n_classes.
-        mode (str, optional): Classification method - "jenks" for natural breaks or "equal" for equal intervals.
-                             Must be used together with n_classes. Mutually exclusive with thresholds.
-        n_classes (int, optional): Number of classes for classification. Must be used together with mode.
-                                 Mutually exclusive with thresholds.
+        thresholds (list, optional): List of threshold values for contour/polygon generation. Mutually exclusive with mode/n_classes.
+        mode (str, optional): Classification method - "jenks" for natural breaks or "equal" for equal intervals. Must be used together with n_classes. Mutually exclusive with thresholds.
+        n_classes (int, optional): Number of classes for classification. Must be used together with mode. Mutually exclusive with thresholds.
         stack (bool): If True, processes all timesteps together. If False, creates separate files for each timestep.
-    
+        flatten (bool, optional): If True (default), merge all contours for each threshold into a single MultiLineString feature. If False, keep each contour as a separate LineString feature.
+        vector_type (str): 'contour' for isolines, 'polygon' for thresholded polygons.
     Returns:
         None
     """
-    # Load GRIB data
-    ds = xr.open_dataset(filepath, engine="cfgrib", decode_timedelta=True)
-    tp = ds['tp']  # total precipitation variable
 
-    # Convert from meters to millimeters
+    def vectorize_raster_with_thresholds(raster_data, transform, thresholds, flatten=True):
+        """
+        Vectorize raster data based on threshold ranges and return GeoDataFrame of polygons.
+        If flatten=True, merge all polygons for each threshold into a single MultiPolygon feature.
+        """
+        from shapely.geometry import shape, MultiPolygon
+        sorted_thresholds = sorted(thresholds)
+        all_features = []
+        for threshold in sorted_thresholds:
+            if threshold == 0:
+                mask = (raster_data > threshold).astype(np.uint8)
+                precip_val = threshold
+            else:
+                mask = (raster_data >= threshold).astype(np.uint8)
+                precip_val = threshold
+            if not np.any(mask):
+                continue
+            polygons = []
+            for geom, value in shapes(mask, mask=mask, transform=transform):
+                if value == 1:
+                    poly = shape(geom)
+                    if poly.is_valid and not poly.is_empty:
+                        polygons.append(poly)
+            if polygons:
+                if flatten:
+                    all_features.append({
+                        'geometry': MultiPolygon(polygons),
+                        'precipitation_mm': precip_val,
+                    })
+                else:
+                    for poly in polygons:
+                        all_features.append({
+                            'geometry': poly,
+                            'precipitation_mm': precip_val,
+                        })
+        gdf = gpd.GeoDataFrame(all_features, crs='EPSG:4326')
+        gdf = gdf.reset_index().rename(columns={'index': 'fid'})
+        gdf = gdf[['fid', 'geometry', 'precipitation_mm']]
+        if flatten:
+            print(f"Generated {len(gdf)} MultiPolygon features across {len(sorted_thresholds)} threshold levels")
+        else:
+            print(f"Generated {len(gdf)} Polygon features across {len(sorted_thresholds)} threshold levels")
+        return gdf
+
+    def create_contours_with_thresholds(raster_data, lon, lat, thresholds, flatten=True):
+        """
+        Create contour lines from raster data based on threshold values and return GeoDataFrame.
+        If flatten=True, merge all contours for each threshold into a single MultiLineString feature.
+        """
+        from shapely.geometry import MultiLineString
+        features = []
+        lon_mesh, lat_mesh = np.meshgrid(lon, lat)
+        sorted_thresholds = sorted(thresholds)
+        fig, ax = plt.subplots(figsize=(1, 1))
+        try:
+            contour_set = ax.contour(lon_mesh, lat_mesh, raster_data, levels=sorted_thresholds)
+            for i, threshold in enumerate(sorted_thresholds):
+                lines = []
+                if hasattr(contour_set, 'allsegs') and i < len(contour_set.allsegs):
+                    level_paths = contour_set.allsegs[i]
+                    for path_coords in level_paths:
+                        if len(path_coords) < 2:
+                            continue
+                        try:
+                            line_geom = LineString(path_coords)
+                            if line_geom.is_valid and not line_geom.is_empty:
+                                lines.append(line_geom)
+                        except Exception as e:
+                            print(f"Warning: Skipping invalid contour geometry for level {threshold}mm: {e}")
+                            continue
+                if lines:
+                    if flatten:
+                        features.append({
+                            'geometry': MultiLineString(lines),
+                            'precipitation_mm': threshold,
+                        })
+                    else:
+                        for line_geom in lines:
+                            features.append({
+                                'geometry': line_geom,
+                                'precipitation_mm': threshold,
+                            })
+        finally:
+            plt.close(fig)
+        if not features:
+            print("No valid contours generated")
+            return gpd.GeoDataFrame()
+        gdf = gpd.GeoDataFrame(features, crs='EPSG:4326')
+        gdf = gdf.reset_index().rename(columns={'index': 'fid'})
+        gdf = gdf[['fid', 'geometry', 'precipitation_mm']]
+        if flatten:
+            print(f"Generated {len(gdf)} MultiLineString features across {len(sorted_thresholds)} threshold levels")
+        else:
+            print(f"Generated {len(gdf)} LineString features across {len(sorted_thresholds)} threshold levels")
+        return gdf
+    
+    ds = xr.open_dataset(filepath, engine="cfgrib", decode_timedelta=True)
+    tp = ds['tp']
     tp_mm = tp * 1000
     tp_mm.attrs['units'] = 'mm'
-    
-    # Parameter validation - ensure mutual exclusivity
+    # Threshold logic
     if thresholds is not None and (mode is not None or n_classes is not None):
         raise ValueError("thresholds parameter is mutually exclusive with mode/n_classes parameters")
-    
     if (mode is not None and n_classes is None) or (mode is None and n_classes is not None):
         raise ValueError("mode and n_classes must both be specified together or both be None")
-    
     if mode is not None and mode not in ["jenks", "equal"]:
         raise ValueError("mode must be either 'jenks' or 'equal'")
-    
-    # Generate thresholds based on parameters
     if thresholds is not None:
-        # Use custom thresholds
         print(f"Using custom thresholds: {thresholds}")
     elif mode is not None and n_classes is not None:
-        # Use classification method
         print(f"Using {mode} classification with {n_classes} classes")
-        
-        # Get all precipitation values (excluding zeros for better classification)
         all_values = tp_mm.values.flatten()
         precip_values = all_values[all_values > 0]
-        
         if len(precip_values) == 0:
             print("No precipitation data found, using minimal thresholds")
             thresholds = [0.1, 1, 5]
         else:
             max_precip = float(np.nanmax(precip_values))
             print(f"Maximum precipitation in data: {max_precip:.2f} mm")
-            
             if mode == "equal":
-                # Equal interval classification
-                min_precip = 0  # Start from 0
                 interval = max_precip / n_classes
                 thresholds = [interval * (i + 1) for i in range(n_classes)]
                 print(f"Equal interval thresholds: {[round(t, 2) for t in thresholds]}")
-                
             elif mode == "jenks":
-                # Natural breaks (Jenks) classification
                 try:
                     import jenkspy
-                    # Sample data if too large for performance
                     if len(precip_values) > 10000:
                         sample_size = 10000
                         precip_sample = np.random.choice(precip_values, sample_size, replace=False)
                     else:
                         precip_sample = precip_values
-                    
-                    # Get jenks breaks
                     breaks = jenkspy.jenks_breaks(precip_sample, n_classes)
-                    # Remove the first break (minimum value) to get thresholds
                     thresholds = breaks[1:]
                     print(f"Jenks natural breaks thresholds: {[round(t, 2) for t in thresholds]}")
-                    
                 except ImportError:
                     print("Warning: jenkspy not available, falling back to equal intervals")
-                    # Fallback to equal intervals
-                    min_precip = 0
                     interval = max_precip / n_classes
                     thresholds = [interval * (i + 1) for i in range(n_classes)]
                     print(f"Equal interval thresholds (fallback): {[round(t, 2) for t in thresholds]}")
     else:
-        # Default strategy: every 50mm up to max value
-        max_precip = float(np.nanmax(tp_mm.values))
-        print(f"Maximum precipitation in data: {max_precip:.2f} mm")
-        
-        if max_precip <= 0:
-            print("No precipitation data found, using minimal thresholds")
-            thresholds = [0.1, 1, 5]
-        else:
-            # Calculate the upper bound that includes max_precip
-            # Round up to next 50mm increment
-            upper_bound = int(np.ceil(max_precip / 50) * 50)
-            
-            # Create thresholds every 50mm from 50 to upper_bound
-            thresholds = list(range(50, upper_bound + 1, 50))
-            
-            print(f"Auto-generated thresholds every 50mm up to {upper_bound}mm: {thresholds}")
-
-    # Get coordinates and transformation
+        print("No thresholds, mode, or n_classes provided. Using default threshold: 150 mm")
+        thresholds = [150]
     lon = tp_mm.longitude.values
     lat = tp_mm.latitude.values
     res_x = abs(lon[1] - lon[0])
     res_y = abs(lat[1] - lat[0])
     transform = from_origin(lon.min() - res_x/2, lat.max() + res_y/2, res_x, res_y)
-
-    # Handle data dimensions
     data = tp_mm.values
-    if data.ndim == 3:  # (step, y, x)
+    if data.ndim == 3:
         bands = data.shape[0]
-    elif data.ndim == 2:  # (y, x)
+    elif data.ndim == 2:
         bands = 1
-        data = data[np.newaxis, :, :]  # add band dimension
+        data = data[np.newaxis, :, :]
     else:
         raise ValueError(f"Unexpected data shape: {data.shape}")
 
-    def vectorize_raster_with_thresholds(raster_data, transform, thresholds):
-        """
-        Vectorize raster data based on threshold ranges and return GeoDataFrame.
-        """
-        geometries = []
-        
-        # Get actual maximum value from the raster data
-        actual_max = float(np.nanmax(raster_data))
-        
-        # Sort thresholds to ensure proper ordering
-        sorted_thresholds = sorted(thresholds)
-        
-        # Create threshold ranges
-        ranges = []
-        for i in range(len(sorted_thresholds)):
-            if i == 0:
-                # First range: 0 to first threshold
-                ranges.append((0, sorted_thresholds[i]))
-            # Range from current threshold to next threshold
-            if i < len(sorted_thresholds) - 1:
-                ranges.append((sorted_thresholds[i], sorted_thresholds[i + 1]))
-        
-        # Last range: last threshold to actual maximum value
-        ranges.append((sorted_thresholds[-1], actual_max))
-        
-        for min_val, max_val in ranges:
-            # Create mask for current threshold range
-            if min_val == max_val:
-                # Skip if range has no width
-                continue
-            elif max_val == actual_max and min_val < actual_max:
-                # Last range includes the maximum value
-                mask = (raster_data >= min_val).astype(np.uint8)
-                range_label = f"{min_val} - {max_val:.2f} mm"
-                max_threshold_val = max_val
-            else:
-                mask = ((raster_data >= min_val) & (raster_data < max_val)).astype(np.uint8)
-                range_label = f"{min_val} - {max_val} mm"
-                max_threshold_val = max_val
-            
-            # Skip if no pixels in this range
-            if not np.any(mask):
-                continue
-            
-            # Convert raster to polygons
-            for geom, value in shapes(mask, mask=mask, transform=transform):
-                if value == 1:  # Only process areas within the threshold
-                    geometries.append({
-                        'geometry': shape(geom),
-                        'threshold_range': range_label,
-                        'min_threshold': min_val,
-                        'max_threshold': max_threshold_val
-                    })
-        
-        gdf = gpd.GeoDataFrame(geometries, crs='EPSG:4326')
-        
-        return gpd.GeoDataFrame(geometries, crs='EPSG:4326')
 
     if not stack and bands > 1:
-        # Save each timestep as a separate GeoPackage file
         steps = ds["step"].values if "step" in tp_mm.dims else range(bands)
         step_hours = [int(s / np.timedelta64(1, 'h')) if isinstance(s, np.timedelta64) else int(s) for s in steps]
-        
         for i in range(bands):
-            # Generate output filename for individual timestep
             orig_filename = os.path.basename(filepath)
             match = re.search(r'base(\d{8})T(\d{2})Z_h(\d+)_step(\d+)', orig_filename)
             if match:
@@ -519,54 +510,52 @@ def grib_to_geopackage(filepath, outpath=None, thresholds=None, mode=None, n_cla
                 gpkg_path = os.path.join(os.path.dirname(filepath), gpkg_filename)
             else:
                 gpkg_path = f"{os.path.splitext(filepath)[0]}_step_{step_hours[i]}h.gpkg"
-            
-            # Vectorize current timestep
-            gdf = vectorize_raster_with_thresholds(data[i, :, :], transform, thresholds)
-            
+            # Choose vectorization method
+            if vector_type == "contour":
+                gdf = create_contours_with_thresholds(data[i, :, :], lon, lat, thresholds, flatten=flatten)
+            elif vector_type == "polygon":
+                gdf = vectorize_raster_with_thresholds(data[i, :, :], transform, thresholds, flatten=flatten)
+            else:
+                raise ValueError(f"Unknown vector_type: {vector_type}")
             if len(gdf) > 0:
-                # Add timestep metadata
                 gdf['timestep_hours'] = step_hours[i]
-                gdf['basetime'] = match.group(1) + 'T' + match.group(2) if match else 'unknown'
-                
-                # Save to GeoPackage
                 gdf.to_file(gpkg_path, driver='GPKG')
                 print(f"GeoPackage written to {gpkg_path} with {len(gdf)} features")
             else:
                 print(f"No features generated for timestep {step_hours[i]}h - skipping file creation")
     
     else:
-        # Save all timesteps in one GeoPackage file with different layers
         if outpath is None:
             out_path = os.path.splitext(filepath)[0] + ".gpkg"
         else:
             out_path = outpath
-        
         if bands > 1:
             steps = ds["step"].values if "step" in tp_mm.dims else range(bands)
             step_hours = [int(s / np.timedelta64(1, 'h')) if isinstance(s, np.timedelta64) else int(s) for s in steps]
-            
-            # Process each timestep as a separate layer
             for i in range(bands):
-                gdf = vectorize_raster_with_thresholds(data[i, :, :], transform, thresholds)
-                
+                if vector_type == "contour":
+                    gdf = create_contours_with_thresholds(data[i, :, :], lon, lat, thresholds, flatten=flatten)
+                elif vector_type == "polygon":
+                    gdf = vectorize_raster_with_thresholds(data[i, :, :], transform, thresholds, flatten=flatten)
+                else:
+                    raise ValueError(f"Unknown vector_type: {vector_type}")
                 if len(gdf) > 0:
-                    # Add timestep metadata
                     gdf['timestep_hours'] = step_hours[i]
                     layer_name = f"precipitation_step_{step_hours[i]}h"
-                    
-                    # Save as layer in GeoPackage
                     if i == 0:
                         gdf.to_file(out_path, driver='GPKG', layer=layer_name)
                     else:
                         gdf.to_file(out_path, driver='GPKG', layer=layer_name, mode='a')
-                    
                     print(f"Layer '{layer_name}' written to {out_path} with {len(gdf)} features")
                 else:
                     print(f"No features generated for timestep {step_hours[i]}h - skipping layer")
         else:
-            # Single timestep
-            gdf = vectorize_raster_with_thresholds(data[0, :, :], transform, thresholds)
-            
+            if vector_type == "contour":
+                gdf = create_contours_with_thresholds(data[0, :, :], lon, lat, thresholds, flatten=flatten)
+            elif vector_type == "polygon":
+                gdf = vectorize_raster_with_thresholds(data[0, :, :], transform, thresholds, flatten=flatten)
+            else:
+                raise ValueError(f"Unknown vector_type: {vector_type}")
             if len(gdf) > 0:
                 gdf.to_file(out_path, driver='GPKG')
                 print(f"GeoPackage written to {out_path} with {len(gdf)} features")
