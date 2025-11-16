@@ -322,7 +322,7 @@ def store_metadata(
 
     print(f"Appended metadata for {filename} to {csv_path}")
 
-def grib_to_geopackage(filepath, outpath=None, thresholds=None, mode=None, n_classes=None, stack=True, flatten=True, vector_type='contour'):
+def grib_to_geopackage(filepath, outpath=None, thresholds=None, mode=None, n_classes=None, stack=True, flatten=True, vector_type='polygon'):
     """
     Converts a GRIB file containing ECMWF total precipitation data to GeoPackage format.
     Supports both contour and polygon vectorization via vector_type argument.
