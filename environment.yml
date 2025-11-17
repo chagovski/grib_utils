@@ -12,3 +12,4 @@ dependencies:
   - jupyter=1.1.1
   - geopandas
   - jenkspy
+  - cdsapi>=0.7.7

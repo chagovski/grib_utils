@@ -37,7 +37,7 @@ if __name__ == "__main__":
     gpkg_group.add_argument(
         '--vector_type',
         choices=['contour', 'polygon'],
-        default='contour',
+        default='polygon',
         help="Type of vector output for geopackage: 'contour' or 'polygon'"
     )
     gpkg_group.add_argument(
